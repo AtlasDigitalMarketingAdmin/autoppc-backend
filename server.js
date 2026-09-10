@@ -63,7 +63,7 @@ app.post('/api/users', async (req, res) => {
 // Amazon OAuth: Start login
 app.get('/auth/amazon', (req, res) => {
   const state = Math.random().toString(36).substring(7);
-  const authUrl = `${AMAZON_AUTH_URL}?client_id=${AMAZON_CLIENT_ID}&scope=advertising:campaign_management&response_type=code&redirect_uri=${AMAZON_REDIRECT_URI}&state=${state}`;
+  const authUrl = `${AMAZON_AUTH_URL}?client_id=${AMAZON_CLIENT_ID}&response_type=code&redirect_uri=${AMAZON_REDIRECT_URI}&state=${state}`;
   res.json({ url: authUrl });
 });
 
