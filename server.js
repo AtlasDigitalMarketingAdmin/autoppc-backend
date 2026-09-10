@@ -4,6 +4,15 @@ require('dotenv').config();
 
 const app = express();
 app.use(express.json());
+const cors = require('cors');
+app.use(cors({
+  origin: [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://autoppc-frontend.vercel.app',
+    'https://www.autoppc.io'
+  ]
+}));
 
 // Database connection
 const pool = new Pool({
