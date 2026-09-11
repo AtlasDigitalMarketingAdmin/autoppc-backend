@@ -2,6 +2,11 @@ const express = require('express');
 const { Pool } = require('pg');
 const axios = require('axios');
 const cors = require('cors');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const multer = require('multer');
+const csv = require('csv-parser');
+const { Readable } = require('stream');
 require('dotenv').config();
 
 const app = express();
@@ -23,95 +28,84 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Amazon API config
-const AMAZON_CLIENT_ID = process.env.AMAZON_CLIENT_ID;
-const AMAZON_CLIENT_SECRET = process.env.AMAZON_CLIENT_SECRET;
-const AMAZON_REDIRECT_URI = process.env.AMAZON_REDIRECT_URI;
-const AMAZON_AUTH_URL = 'https://www.amazon.com/ap/oa';
-const AMAZON_TOKEN_URL = 'https://api.amazon.com/auth/o2/token';
-const AMAZON_API_URL = 'https://advertising-api.amazon.com';
+// File upload
+const upload = multer({ storage: multer.memoryStorage() });
+
+// JWT Secret
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+
+// Middleware to verify JWT
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+  
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: 'Invalid token' });
+    req.user = user;
+    next();
+  });
+};
 
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'Backend is running!' });
 });
 
-// Get all users
-app.get('/api/users', async (req, res) => {
+// SIGNUP
+app.post('/api/auth/signup', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM users');
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+    const { email, name, password } = req.body;
+    
+    if (!email || !password || !name) {
+      return res.status(400).json({ error: 'Email, name, and password required' });
+    }
 
-// Create user
-app.post('/api/users', async (req, res) => {
-  try {
-    const { email, name } = req.body;
+    // Check if user exists
+    const existingUser = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create user
     const result = await pool.query(
-      'INSERT INTO users (email, name) VALUES ($1, $2) RETURNING *',
-      [email, name]
+      'INSERT INTO users (email, name, password) VALUES ($1, $2, $3) RETURNING id, email, name',
+      [email, name, hashedPassword]
     );
-    res.json(result.rows[0]);
+
+    const user = result.rows[0];
+    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+
+    res.json({ user, token });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Amazon OAuth: Start login
-app.get('/auth/amazon', (req, res) => {
-  const state = Math.random().toString(36).substring(7);
-  const authUrl = `${AMAZON_AUTH_URL}?client_id=${AMAZON_CLIENT_ID}&response_type=code&redirect_uri=${AMAZON_REDIRECT_URI}&state=${state}`;
-  res.json({ url: authUrl });
-});
-
-// Amazon OAuth: Callback
-app.get('/callback', async (req, res) => {
+// LOGIN
+app.post('/api/auth/login', async (req, res) => {
   try {
-    const { code } = req.query;
-    if (!code) {
-      return res.status(400).json({ error: 'No authorization code' });
-    }
-    const tokenResponse = await axios.post(AMAZON_TOKEN_URL, null, {
-      params: {
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: AMAZON_REDIRECT_URI,
-        client_id: AMAZON_CLIENT_ID,
-        client_secret: AMAZON_CLIENT_SECRET
-      }
-    });
-    const { access_token } = tokenResponse.data;
-    res.json({ success: true, access_token: access_token.substring(0, 20) + '...' });
-  } catch (err) {
-    console.error('OAuth error:', err.response?.data || err.message);
-    res.status(500).json({ error: 'Failed to authorize with Amazon' });
-  }
-});
+    const { email, password } = req.body;
 
-// Get campaigns from Amazon
-app.get('/api/amazon/campaigns', async (req, res) => {
-  try {
-    const { access_token } = req.query;
-    if (!access_token) {
-      return res.status(400).json({ error: 'Access token required' });
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password required' });
     }
-    const response = await axios.get(`${AMAZON_API_URL}/v2/campaigns`, {
-      headers: {
-        'Authorization': `Bearer ${access_token}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    res.json(response.data);
-  } catch (err) {
-    console.error('Amazon API error:', err.response?.data || err.message);
-    res.status(500).json({ error: 'Failed to fetch campaigns from Amazon' });
-  }
-});
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✓ Server running on http://localhost:${PORT}`);
-});
+    // Find user
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+
+    const user = result.rows[0];
+    const passwordMatch = await bcrypt.compare(password, user.password);
+
+    if (!passwordMatch) {
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+
+    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
