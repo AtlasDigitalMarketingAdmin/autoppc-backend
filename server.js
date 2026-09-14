@@ -18,6 +18,7 @@ app.use(cors({
   origin: [
     'http://localhost:5173',
     'http://localhost:3000',
+    'https://sea-lion-app-zrdtv.ondigitalocean.app',
     'https://autoppc-frontend.vercel.app',
     'https://frabjous-strudel-46555c.netlify.app',
     'https://www.autoppc.io'
